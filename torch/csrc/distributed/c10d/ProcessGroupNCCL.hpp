@@ -126,6 +126,10 @@ static std::vector<std::string> TORCH_NCCL_COORD_CHECK_MILSEC = {
 static std::vector<std::string> TORCH_NCCL_LOG_CPP_STACK_ON_UNCLEAN_SHUTDOWN = {
     "TORCH_NCCL_LOG_CPP_STACK_ON_UNCLEAN_SHUTDOWN"};
 
+// Whether to include stack trace in the Flight Recorder trace (default false)
+static std::vector<std::string> TORCH_NCCL_INCLUDE_STACK_TRACE = {
+    "TORCH_NCCL_INCLUDE_STACK_TRACE"};
+
 // Control whether to use CudaEventCache for the collective in watchdog thread.
 // We noticed in the past when cuda global lock is held, destroying CudaEvent
 // can cause a hang.

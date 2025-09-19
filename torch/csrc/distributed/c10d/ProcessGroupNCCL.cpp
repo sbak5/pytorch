@@ -1580,7 +1580,7 @@ bool ProcessGroupNCCL::dumpDebuggingInfo(bool includeStackTrace /*=true*/) {
     // We dump nccl trace into local disk by default and users can register
     // their customized writer by inheriting `DebugInfoWriter` via
     // `registerDebugInfoWriter`.
-    auto ncclTrace = dump_nccl_trace(true, includeStackTrace, false);
+    auto ncclTrace = dump_nccl_trace(true, includeStackTrace, true);
     // dump_nccl_trace will hang so we don't grab the global lock until we get
     // the trace.
     std::lock_guard<std::mutex> lock(writeDebugInfoMutex);
@@ -1851,7 +1851,7 @@ void ProcessGroupNCCL::HeartbeatMonitor::runLoop() {
       LOG(INFO) << pg_->logPrefix()
                 << "Dump signal received through pipe, triggering FR dump.";
       futures.emplace_back(std::async(std::launch::async, [this]() {
-        return this->pg_->dumpDebuggingInfo();
+        return this->pg_->dumpDebuggingInfo(false);
       }));
     }
   }
@@ -1869,7 +1869,7 @@ void ProcessGroupNCCL::HeartbeatMonitor::runLoop() {
   if (checkDumpSignal && shouldDump_.load()) {
     // Store debug info to storage if no other thread does it. (By default to
     // local disk)
-    bool dumpStackTrace = true;
+    bool dumpStackTrace = getCvarBool(TORCH_NCCL_INCLUDE_STACK_TRACE, false);
     ::c10d::C10dLoggingData debugLog;
     debugLog.integers["pg_id"] = static_cast<int64_t>(pg_->getUid());
     debugLog.integers["rank"] = pg_->getRank();
@@ -2055,6 +2055,14 @@ void ProcessGroupNCCL::Watchdog::run() {
           "Process group watchdog thread terminated with exception: ",
           e.what());
       LOG(ERROR) << exitMsg;
+      // Broadcast only once
+      if (!shouldDump_.load()) {
+        pg_->broadcastDumpSignal();
+        std::this_thread::sleep_for(std::chrono::milliseconds(
+              pg_->heartbeatMonitor_->getDumpTimeout() * 4));
+
+        pg_->dumpDebuggingInfo(false);
+      }
       if (C10_LIKELY(rethrowCUDAErrors_) ||
           !(std::string(e.what()).find("CUDA Error"))) {
         // TODO(whc) clean up the rethrow - why is it stored in a class var and
