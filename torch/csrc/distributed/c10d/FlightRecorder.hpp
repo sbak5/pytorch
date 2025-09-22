@@ -204,7 +204,7 @@ struct FlightRecorder {
 
   void update_state(Entry& r);
 
-  std::vector<Entry> dump_entries();
+  std::vector<Entry> dump_entries(dumpAsIs = false);
 
   // Returns the entry with the given id, if it exists. Otherwise, returns
   // std::nullopt.
@@ -253,7 +253,8 @@ struct FlightRecorder {
           std::unordered_map<std::string, std::string>>>& extraDumpMap,
       bool includeCollectives,
       bool includeStackTraces,
-      bool onlyActive);
+      bool onlyActive,
+      bool dumpAsIs=false);
 };
 
 // Dumps the fr traces and additional information about the Process

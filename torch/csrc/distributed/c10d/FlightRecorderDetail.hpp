@@ -159,7 +159,7 @@ void FlightRecorder<EventType>::update_state(Entry& r) {
 
 template <typename EventType>
 std::vector<typename FlightRecorder<EventType>::Entry> FlightRecorder<
-    EventType>::dump_entries() {
+    EventType>::dump_entries(bool dumpAsIs) {
   std::vector<Entry> result;
   {
     std::lock_guard<std::mutex> guard(mutex_);
@@ -175,7 +175,8 @@ std::vector<typename FlightRecorder<EventType>::Entry> FlightRecorder<
   }
   // query any remaining events
   for (auto& r : result) {
-    update_state(r);
+    if (!dumpAsIs)
+        update_state(r);
     r.start_ = r.end_ = nullptr;
   }
   return result;
@@ -252,10 +253,11 @@ void FlightRecorder<EventType>::retire_id(
 template <typename EventType>
 const c10::List<c10::IValue> FlightRecorder<EventType>::getCollectiveTrace(
     bool includeStacktraces,
-    bool onlyActive) {
+    bool onlyActive,
+    bool dumpAsIs) {
   auto entries = new_list();
   // Entries are returned in the order they were recorded
-  auto result = dump_entries();
+  auto result = dump_entries(dumpAsIs);
   std::vector<torch::CapturedTraceback*> tracebacks;
   torch::SymbolizedTracebacks stracebacks;
   std::vector<c10::IValue> all_frames;
@@ -516,7 +518,8 @@ std::string FlightRecorder<EventType>::dump(
         std::unordered_map<std::string, std::string>>>& extraDumpMap,
     bool includeCollectives,
     bool includeStackTraces,
-    bool onlyActive) {
+    bool onlyActive,
+    bool dumpAsIs) {
   STATIC_SCOPED_WAIT_COUNTER(pytorch.wait_counter.FlightRecorder__dump);
   auto result = new_dict();
   // common values
@@ -528,7 +531,7 @@ std::string FlightRecorder<EventType>::dump(
   // collective trace
   if (includeCollectives) {
     result.insert(
-        entries_key, getCollectiveTrace(includeStackTraces, onlyActive));
+        entries_key, getCollectiveTrace(includeStackTraces, onlyActive, dumpAsIs));
   }
 
   // convert extraDumpMap into a dictionary
