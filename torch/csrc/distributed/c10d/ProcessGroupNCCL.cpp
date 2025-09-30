@@ -1564,7 +1564,7 @@ ProcessGroupNCCL::~ProcessGroupNCCL() {
   }
 }
 
-bool ProcessGroupNCCL::dumpDebuggingInfo(bool includeStackTrace /*=true*/) {
+bool ProcessGroupNCCL::dumpDebuggingInfo(bool includeStackTrace /*=true*/, bool onlyActive /*=true*/) {
   // This will log counter for how long dumpDebuggingInfo actually takes.
   STATIC_SCOPED_WAIT_COUNTER(pytorch.ProcessGroupNCCL__dumpDebuggingInfo);
 
@@ -1580,7 +1580,7 @@ bool ProcessGroupNCCL::dumpDebuggingInfo(bool includeStackTrace /*=true*/) {
     // We dump nccl trace into local disk by default and users can register
     // their customized writer by inheriting `DebugInfoWriter` via
     // `registerDebugInfoWriter`.
-    auto ncclTrace = dump_nccl_trace(true, includeStackTrace, true);
+    auto ncclTrace = dump_nccl_trace(true, includeStackTrace, onlyActive);
     // dump_nccl_trace will hang so we don't grab the global lock until we get
     // the trace.
     std::lock_guard<std::mutex> lock(writeDebugInfoMutex);
@@ -1869,7 +1869,8 @@ void ProcessGroupNCCL::HeartbeatMonitor::runLoop() {
   if (checkDumpSignal && shouldDump_.load()) {
     // Store debug info to storage if no other thread does it. (By default to
     // local disk)
-    bool dumpStackTrace = getCvarBool(TORCH_NCCL_INCLUDE_STACK_TRACE, false);
+    bool dumpStackTrace = getCvarBool(TORCH_NCCL_INCLUDE_STACK_TRACE, true);
+    bool onlyActive = getCvarBool(TORCH_NCCL_INCLUDE_ONLY_ACTIVE, false);
     ::c10d::C10dLoggingData debugLog;
     debugLog.integers["pg_id"] = static_cast<int64_t>(pg_->getUid());
     debugLog.integers["rank"] = pg_->getRank();
@@ -1878,8 +1879,8 @@ void ProcessGroupNCCL::HeartbeatMonitor::runLoop() {
     debugLog.strings["flight_recorder_version"] = c10d::version_val_str;
     for (int i = 0; i < 2; i++) {
       std::future<bool> asyncDebugDump =
-          std::async(std::launch::async, [this, dumpStackTrace]() {
-            return this->pg_->dumpDebuggingInfo(dumpStackTrace);
+          std::async(std::launch::async, [this, dumpStackTrace, onlyActive]() {
+            return this->pg_->dumpDebuggingInfo(dumpStackTrace, onlyActive);
           });
 
       // wait for the dump until timeout - log data
@@ -2055,14 +2056,17 @@ void ProcessGroupNCCL::Watchdog::run() {
           "Process group watchdog thread terminated with exception: ",
           e.what());
       LOG(ERROR) << exitMsg;
-      // Broadcast only once
-      if (!shouldDump_.load()) {
-        pg_->broadcastDumpSignal();
-        std::this_thread::sleep_for(std::chrono::milliseconds(
-              pg_->heartbeatMonitor_->getDumpTimeout() * 4));
+      // This condition is triggered when any routine in watchdog gets an exception
+      // e.g. `FlightRecorder<EventType>::update_state` through cudaEventQuery
+      LOG(ERROR)<< pg_->logPrefix() << "This PG sending dump signal and trying to dump FR trace on its own";
+      pg_->broadcastDumpSignal();
+      std::this_thread::sleep_for(std::chrono::milliseconds(
+            pg_->heartbeatMonitor_->getDumpTimeout() * 4));
 
-        pg_->dumpDebuggingInfo(false);
-      }
+      bool dumpStackTrace = getCvarBool(TORCH_NCCL_INCLUDE_STACK_TRACE, true);
+      bool onlyActive = getCvarBool(TORCH_NCCL_INCLUDE_ONLY_ACTIVE, false);
+      pg_->dumpDebuggingInfo(dumpStackTrace, onlyActive);
+
       if (C10_LIKELY(rethrowCUDAErrors_) ||
           !(std::string(e.what()).find("CUDA Error"))) {
         // TODO(whc) clean up the rethrow - why is it stored in a class var and
