@@ -1431,9 +1431,9 @@ void ProcessGroupNCCL::dumpExtraDebuggingInfo() {
   // When this process group is terminated for some exception out of NCCL
   bool dumpExtraOnExec_ = getCvarBool(TORCH_NCCL_EXTRA_DUMP_ON_EXEC, true);
   if (dumpExtraOnExec_) {
-    LOG(INFO) << logPrefix()
-              << "Sending extra dumping signal";
     if (!shouldDump_.load()) {
+      LOG(INFO) << logPrefix()
+                << "Sending extra dumping signal";
       broadcastDumpSignal();
       std::this_thread::sleep_for(std::chrono::milliseconds(
             heartbeatMonitor_->getDumpTimeout() * 4));
@@ -1590,7 +1590,7 @@ bool ProcessGroupNCCL::dumpDebuggingInfo(bool includeStackTrace /*=true*/, bool 
   LOG(ERROR)
       << logPrefix()
       << "ProcessGroupNCCL preparing to dump debug info. Include stack trace: "
-      << includeStackTrace << "onlyActive: "<< onlyActive;
+      << includeStackTrace << ", only active collectives: "<< onlyActive;
   if (traceBufferSize_ > 0) {
     // We dump nccl trace into local disk by default and users can register
     // their customized writer by inheriting `DebugInfoWriter` via
