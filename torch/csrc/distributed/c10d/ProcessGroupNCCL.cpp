@@ -1426,6 +1426,21 @@ bool ProcessGroupNCCL::abortComms(
   return true;
 }
 
+void ProcessGroupNCCL::dumpExtraDebuggingInfo() {
+  // This extra dump is intended to capture the current snapshot of collectives
+  // When this process group is terminated for some exception out of NCCL
+  bool dumpExtraOnExec_ = getCvarBool(TORCH_NCCL_EXTRA_DUMP_ON_EXEC, true);
+  if (dumpExtraOnExec_) {
+    LOG(INFO) << logPrefix()
+              << "Sending extra dumping signal";
+    if (!shouldDump_.load()) {
+      broadcastDumpSignal();
+      std::this_thread::sleep_for(std::chrono::milliseconds(
+            heartbeatMonitor_->getDumpTimeout() * 4));
+    }
+  }
+}
+
 // Abort this backend.
 void ProcessGroupNCCL::abort() {
   // This will log counter for how long the abort actually takes.
@@ -1436,7 +1451,7 @@ void ProcessGroupNCCL::abort() {
   // potentially block and hence avoid it in this method.
   terminateProcessGroup_.store(true);
   watchdog_->notify();
-
+  dumpExtraDebuggingInfo(); 
   // launch abort asynchronously and wait for it to complete or timeout
   LOG(INFO) << logPrefix()
             << "Launching ProcessGroupNCCL abort asynchronously.";
@@ -1564,7 +1579,7 @@ ProcessGroupNCCL::~ProcessGroupNCCL() {
   }
 }
 
-bool ProcessGroupNCCL::dumpDebuggingInfo(bool includeStackTrace /*=true*/, bool onlyActive /*=true*/) {
+bool ProcessGroupNCCL::dumpDebuggingInfo(bool includeStackTrace /*=true*/, bool onlyActive /*=false*/) {
   // This will log counter for how long dumpDebuggingInfo actually takes.
   STATIC_SCOPED_WAIT_COUNTER(pytorch.ProcessGroupNCCL__dumpDebuggingInfo);
 
@@ -1575,7 +1590,7 @@ bool ProcessGroupNCCL::dumpDebuggingInfo(bool includeStackTrace /*=true*/, bool 
   LOG(ERROR)
       << logPrefix()
       << "ProcessGroupNCCL preparing to dump debug info. Include stack trace: "
-      << includeStackTrace;
+      << includeStackTrace << "onlyActive: "<< onlyActive;
   if (traceBufferSize_ > 0) {
     // We dump nccl trace into local disk by default and users can register
     // their customized writer by inheriting `DebugInfoWriter` via
@@ -2042,6 +2057,9 @@ void ProcessGroupNCCL::Watchdog::run() {
     VLOG(2) << pg_->logPrefix()
             << "Process group watchdog thread terminated normally";
   } catch (std::exception& e) {
+    // This condition is triggered when any routine in watchdog gets an exception
+    // e.g. `FlightRecorder<EventType>::update_state` through cudaEventQuery
+    pg_->dumpExtraDebuggingInfo(); 
     if (std::string(e.what()).find("driver shutting down") !=
         std::string::npos) {
       VLOG(2)
@@ -2056,17 +2074,6 @@ void ProcessGroupNCCL::Watchdog::run() {
           "Process group watchdog thread terminated with exception: ",
           e.what());
       LOG(ERROR) << exitMsg;
-      // This condition is triggered when any routine in watchdog gets an exception
-      // e.g. `FlightRecorder<EventType>::update_state` through cudaEventQuery
-      LOG(ERROR)<< pg_->logPrefix() << "This PG sending dump signal and trying to dump FR trace on its own";
-      pg_->broadcastDumpSignal();
-      std::this_thread::sleep_for(std::chrono::milliseconds(
-            pg_->heartbeatMonitor_->getDumpTimeout() * 4));
-
-      bool dumpStackTrace = getCvarBool(TORCH_NCCL_INCLUDE_STACK_TRACE, true);
-      bool onlyActive = getCvarBool(TORCH_NCCL_INCLUDE_ONLY_ACTIVE, false);
-      pg_->dumpDebuggingInfo(dumpStackTrace, onlyActive);
-
       if (C10_LIKELY(rethrowCUDAErrors_) ||
           !(std::string(e.what()).find("CUDA Error"))) {
         // TODO(whc) clean up the rethrow - why is it stored in a class var and
