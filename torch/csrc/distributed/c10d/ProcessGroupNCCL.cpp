@@ -1431,14 +1431,18 @@ void ProcessGroupNCCL::dumpExtraDebuggingInfo() {
   // When this process group is terminated for some exception out of NCCL
   bool dumpExtraOnExec_ = getCvarBool(TORCH_NCCL_EXTRA_DUMP_ON_EXEC, true);
   if (dumpExtraOnExec_) {
-    bool should_dump_local = false
+    bool should_dump_local = false;
     bool succeded = shouldDump_.compare_exchange_strong(should_dump_local, true, std::memory_order_release, std::memory_order_acquire);
     if (succeded) {
       LOG(INFO) << logPrefix()
                 << "Sending extra dumping signal";
       broadcastDumpSignal();
-      std::this_thread::sleep_for(std::chrono::milliseconds(
-            heartbeatMonitor_->getDumpTimeout() * 4));
+      // When this routine is called, exception is captured so 
+      // dumping by default_pg is not guaranteed due to early termination of process
+      // So we call dumping manually here 
+      bool onlyActive = getCvarBool(TORCH_NCCL_INCLUDE_ONLY_ACTIVE, false);
+      // Stacktrace is not included at the moment to prevent deadlock due to GIL
+      dumpDebuggingInfo(false, onlyActive);
     }
   }
 }
@@ -1448,12 +1452,12 @@ void ProcessGroupNCCL::abort() {
   // This will log counter for how long the abort actually takes.
   STATIC_SCOPED_WAIT_COUNTER(pytorch.ProcessGroupNCCL__abort);
 
+  dumpExtraDebuggingInfo(); 
   // Don't join threads here since the purpose of this method is to abort all
   // communicators and signal the threads to exit. Joining on the threads could
   // potentially block and hence avoid it in this method.
   terminateProcessGroup_.store(true);
   watchdog_->notify();
-  dumpExtraDebuggingInfo(); 
   // launch abort asynchronously and wait for it to complete or timeout
   LOG(INFO) << logPrefix()
             << "Launching ProcessGroupNCCL abort asynchronously.";
@@ -2060,7 +2064,6 @@ void ProcessGroupNCCL::Watchdog::run() {
             << "Process group watchdog thread terminated normally";
   } catch (std::exception& e) {
     // This condition is triggered when any routine in watchdog gets an exception
-    // e.g. `FlightRecorder<EventType>::update_state` through cudaEventQuery
     pg_->dumpExtraDebuggingInfo(); 
     if (std::string(e.what()).find("driver shutting down") !=
         std::string::npos) {
